@@ -4,11 +4,13 @@ lsi: false
 safe: true
 incremental: false
 highlighter: rouge
+github:
+  is_project_page: false
 gist:
   noscript: false
 kramdown:
   math_engine: mathjax
   syntax_highlighter: rouge
 
-
 theme: jekyll-theme-midnight
+show_downloads: false

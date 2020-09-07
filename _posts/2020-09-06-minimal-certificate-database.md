@@ -1,5 +1,7 @@
-A Minimalist Certificate Database
-=================================
+---
+layout: post
+title: A Minimalist Certificate Database
+---
 
 There's a decentralized networked database system I'm working on (fog-db). It'd 
 be really nice if it had some kind of authorization system, something that would 
@@ -83,8 +85,7 @@ public key is included as part of the signature.
 
 [3]: https://crates.io/crates/fog-pack
 
-Now, fog-pack supports [schema][4], so let's set up what that looks like. Here, 
-I'll 
+Now, fog-pack supports [schema][4], so let's set up what that looks like:
 
 [4]: https://docs.rs/fog-pack/0.1.1/fog_pack/struct.Schema.html
 
@@ -265,86 +266,94 @@ them for later rule-checking.
 First, I don't want to hold onto all certificates indefinitely - they do have 
 end times, after all. Second, I don't want a key-value pair to have more than 
 one value for a key at a time, so I only want to have one certificate for each 
-issuer-subject-key tuple. Third, that means I can replace certificates, so I 
+subject-key-issuer tuple. Third, that means I can replace certificates, so I 
 want to store just the "newest" certificate, and keep it until the highest end 
 time I've seen for that specific issuer-subject-key tuple.
 
-This is easy to express in a key-value store with prefix lookups: each key in 
-the store will be "subject-key-issuer", and the value will be the newest 
+This is easy to express in a key-value database with prefix lookups: each key in 
+the database will be "subject-key-issuer", and the value will be the newest 
 certificate plus the highest end time seen. When a new certificate is pushed to 
-the database, we'll look up where it would go in the store, and compare against 
-the current certificate and the end time. The certificate with the highest start 
-time will stored, and we'll store the maximum end time by looking at the new 
-certificate's end time, comparing it to the currently stored end 
-time, and storing whichever is highest.
+the database, we'll look up where it would go in the database, and compare 
+against the current certificate and the end time. The certificate with the 
+highest start time will be stored, and we'll store the maximum end time by 
+looking at the new certificate's end time, comparing it to the currently stored 
+end time, and storing whichever is highest. So, to summarize:
 
-With the key-value store set up, we can periodically loop through and drop any 
-certificates whose end time is older than the current time, because we know for 
-certain that all matching certificates we've seen so far are expired. We can 
+- key-value database
+- Lookup by subject, then certificate key, then issuer
+- Value holds both the certificate document and highest seen end time
+- Certificates with matching subject-key-issuer tuples are compared, and the 
+	newest one is stored. The highest end time seen for that tuple is recorded.
+
+With the key-value database set up, we can periodically loop through and drop 
+any certificates whose end time is older than the current time, because we know 
+for certain that all matching certificates we've seen so far are expired. We can 
 also use prefix lookup when evaluating our rules.
 
 By keeping certificates seen in a local database, we have two choices for a 
-resposne when asking it to evaluate our rules: it can return a one-time yes/no 
+response when asking it to evaluate our rules: it can return a one-time yes/no 
 response, or it can return a token that will be dynamically updated anytime the 
 database's stored certificates change or become expired.
 
 While I haven't written a complete implementation of this yet, I did go ahead 
-and define what the interface should look like in Rust:
+and define what the interface should look like in Rust. There's functions to add 
+certificates, to look up certificates, and to verify a subject against a full 
+certificate rule set (called a `CertRule` in the code):
 
-```Rust
+```rust
 trait CertDb {
 
-    /// Add a certificate document to the database. Fails if the document is not a valid, signed 
-    /// certificate. On success, returns true if the cert is now the newest.
-    fn add(&mut self, cert: Document) -> Result<bool, CertErr>;
+  /// Add a certificate document to the database. Fails if the document is not a 
+  /// valid, signed certificate. On success, returns true if the cert is now the 
+  /// newest.
+  fn add(&mut self, cert: Document) -> Result<bool, CertErr>;
 
-    /// Add a set of certificate documents to the database. Fails if any of the documents are not 
-    /// valid, signed certificates.
-    fn add_vec(&mut self, certs: Vec<Document>) -> Result<(), CertErr>;
-
-    /// Forcibly drop all certificates from a particular issuer. Returns the overall number of 
-    /// certificates that were dropped. Note: dropping certificates is generally not recommended, 
-    /// as the database will automatically clear out irrelevant, expired certs. Only do this if 
-    /// you're certain the issuer is no longer trusted by anyone. Even then, because certificates 
-    /// are small and should expire in a timely manner, it's worth considering if this is really 
-    /// necessary. The consequence of clearing out certificates is that revocations will also be 
-    /// lost, opening up a possible hole for a revoked certificate to be used in the future.
-    fn drop_by_issuer(&mut self, subject: Identity) -> usize;
-
-    /// Iterator over all certificates matching the given subject. Returns the currently stored 
-    /// certificate and the highest end time seen for that certificate.
-    fn find_by_subject(&self, subject: Identity) -> Box<dyn Iterator<Item = (Document, Timestamp)>;
-
-    /// Iterator over all certificates matching the given issuer. Returns the currently stored 
-    /// certificate and the highest end time seen for that certificate.
-    fn find_by_issuer(&self, issuer: Identity) -> Box<dyn Iterator<Item = (Document, Timestamp)>;
-
-    /// Look up a certificate, given the subject, issuer, and key string. Returns the currently 
-    /// stored certificate and the highest end time seen for that certificate.
-    fn find_tuple(&self, subject: Identity, issuer: Identity, key: &str) -> Option<(Document, Timestamp)>;
-
-    /// Check to see if a subject meets the requirements of a certificate rule. The returned token 
-    /// will be dynamically updated as the database changes.
-    fn verify(&mut self, subject: Identity, chain: CertRule) -> Box<dyn CertToken>;
-
-    /// Check to see if a subject meets the requirements of a certificate rule. Checks only once, 
-    /// so the result is only valid at the exact point in time when this function is called.
-    fn verify_once(&self, subject: Identity, chain: CertRule) -> bool;
-
-    /// Try to prove that a subject meets the requirements of a certificate rule. If it does, all 
-    /// the certificates that were used to show the requirements are met will be returned. By 
-    /// splitting up a `CertRule`, this function may be used to dynamically explore the database.
-    fn prove(&self, subject: Identity, chain: CertRule) -> Option<Vec<Document>> {
-    }
-
+  /// Add a set of certificate documents to the database. Fails if any of the 
+  /// documents are not valid, signed certificates.
+  fn add_vec(&mut self, certs: Vec<Document>) -> Result<(), CertErr>;
+  
+  /// Iterator over all certificates matching the given subject. Returns the 
+  /// currently stored certificate and the highest end time seen for that 
+  /// certificate.
+  fn find_by_subject(&self, subject: Identity) 
+    -> Box<dyn Iterator<Item = (Document, Timestamp)>;
+  
+  /// Iterator over all certificates matching the given issuer. Returns the 
+  /// currently stored certificate and the highest end time seen for that 
+  /// certificate.
+  fn find_by_issuer(&self, issuer: Identity)
+    -> Box<dyn Iterator<Item = (Document, Timestamp)>;
+  
+  /// Look up a certificate, given the subject, issuer, and key string. Returns 
+  /// the currently stored certificate and the highest end time seen for that 
+  /// certificate.
+  fn find_tuple(&self, subject: Identity, issuer: Identity, key: &str)
+    -> Option<(Document, Timestamp)>;
+  
+  /// Check to see if a subject meets the requirements of a certificate rule. 
+  /// The returned token will be dynamically updated as the database changes.
+  fn verify(&mut self, subject: Identity, rule: CertRule)
+    -> Box<dyn CertToken>;
+  
+  /// Check to see if a subject meets the requirements of a certificate rule.  
+  /// Checks only once, so the result is only valid at the exact point in time 
+  /// when this function is called.
+  fn verify_once(&self, subject: Identity, rule: CertRule) -> bool;
+  
+  /// Try to prove that a subject meets the requirements of a certificate rule. 
+  /// If it does, all the certificates that were used to show the requirements 
+  /// are met will be returned. By splitting up a `CertRule`, this function may 
+  /// be used to dynamically explore the database.
+  fn prove(&self, subject: Identity, rule: CertRule) -> Option<Vec<Document>>;
 }
 
-/// An authentication token. It indicates if a given subject Identity matches a certificate rule, 
-/// according to the CertDb that issued it. It dynamically updates whenever CertDb receives new 
-/// certificates. the CertDb `add` & `add_vec` functions are guaranteed to not return until all 
-/// CertTokens have been appropriately updated.
-trait CertToken{
-    fn valid(&self) -> bool;
+/// An authentication token. It indicates if a given subject Identity matches a 
+/// certificate rule, according to the CertDb that issued it. It dynamically 
+/// updates whenever CertDb receives new certificates. the CertDb `add` & 
+/// `add_vec` functions are guaranteed to not return until all CertTokens have 
+/// been appropriately updated.
+trait CertToken {
+  fn valid(&self) -> bool;
 }
 ```
 
