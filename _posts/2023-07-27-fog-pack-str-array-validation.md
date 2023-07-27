@@ -1,6 +1,6 @@
 ---
 layout: post
-title: fog-pack: better string & array validation
+title: fog-pack - better string & array validation
 ---
 
 There's nothing quite like trying to use your crate to help you understand what 
